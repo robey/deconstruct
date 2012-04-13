@@ -20,3 +20,5 @@ resolvers <<= (resolvers) { r =>
 externalResolvers <<= (resolvers) map identity
 
 addSbtPlugin("com.twitter" %% "sbt-package-dist" % "1.0.3")
+
+libraryDependencies += "com.twitter" %% "scalatest-mixins" % "1.0.2"

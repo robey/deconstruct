@@ -21,8 +21,55 @@ object ConstantPoolEntry {
   case class NameAndType(nameIndex: Int, typeIndex: Int) extends ConstantPoolEntry
 }
 
+class ConstantPool(count: Int, data: ByteBuffer) {
+  import ConstantPoolEntry._
+
+  private[this] val pool = new Array[ConstantPoolEntry](count)
+  private[this] var index = 1
+
+  // for the superclass, a 0 index means "nothing", so seed it with a blank string:
+  pool(0) = Utf8(0, 0)
+
+  def apply(n: Int) = pool(n)
+
+  def add(entry: ConstantPoolEntry, advance: Int = 1) {
+    pool(index) = entry
+    index += advance
+  }
+
+  def full = (index == count)
+
+  def stringify(entry: ConstantPoolEntry): String = entry match {
+    case Utf8(d, l) => {
+      // FIXME: maddeningly, "Utf8" uses a modified form of utf-8 that java can't actually decode.
+      // i've decided that for now i don't care.
+      if (l > 0) {
+        val buffer = new Array[Byte](l)
+        data.position(d)
+        data.get(buffer)
+        new String(buffer, "UTF-8")
+      } else {
+        ""
+      }
+    }
+    case I32(n) => n.toString
+    case F32(n) => n.toString
+    case I64(n) => n.toString
+    case F64(n) => n.toString
+    case ClassRef(i) => stringify(pool(i))
+    case StringRef(i) => stringify(pool(i))
+/*
+    -- interesting! these appear to be unused in reality.
+    case FieldRef(c, n) =>
+    case MethodRef(c, n) =>
+    case InterfaceMethodRef(c, n) =>
+    case NameAndType(n, t) =>
+*/
+  }
+}
+
 case class ClassFile(
-  private val d: Deconstruct,
+  pool: ConstantPool,
   majorVersion: Int,
   minorVersion: Int,
   accessFlags: Int,
@@ -33,9 +80,9 @@ case class ClassFile(
   methods: Seq[Deconstruct.Field],
   attributes: Seq[Deconstruct.Attribute]
 ) {
-  def className = d.stringify(classNameEntry)
-  def superclassName = d.stringify(superclassNameEntry)
-  def interfaces = interfaceEntries.map { d.stringify(_) }
+  def className = pool.stringify(classNameEntry)
+  def superclassName = pool.stringify(superclassNameEntry)
+  def interfaces = interfaceEntries.map { pool.stringify(_) }
 
   def dump: String = {
     "class %s (%d.%d) %s\n".format(className, majorVersion, minorVersion, ClassAttributes.toString(accessFlags)) +
@@ -132,19 +179,19 @@ object MethodAttributes {
 }
 
 object Deconstruct {
-  case class Attribute(private val d: Deconstruct, nameEntry: ConstantPoolEntry, dataIndex: Int, size: Int) {
-    def name = d.stringify(nameEntry)
+  case class Attribute(pool: ConstantPool, nameEntry: ConstantPoolEntry, dataIndex: Int, size: Int) {
+    def name = pool.stringify(nameEntry)
   }
 
   case class Field(
-    private val d: Deconstruct,
+    pool: ConstantPool,
     nameEntry: ConstantPoolEntry,
     descriptorEntry: ConstantPoolEntry,
     accessFlags: Int,
     attributes: Seq[Attribute]
   ) {
-    def name = d.stringify(nameEntry)
-    def descriptor = d.stringify(descriptorEntry)
+    def name = pool.stringify(nameEntry)
+    def descriptor = pool.stringify(descriptorEntry)
   }
 
   def apply(in: InputStream): ClassFile = {
@@ -170,10 +217,6 @@ class Deconstruct(data: ByteBuffer) {
   import ConstantPoolEntry._
 
   private[this] final val CafeBabe = 0xcafebabe
-  final val constantPool = new mutable.HashMap[Int, ConstantPoolEntry]
-
-  // for the superclass, a 0 index means "nothing", so seed it with a blank string:
-  constantPool(0) = Utf8(0, 0)
 
   def scan(): ClassFile = {
     data.order(ByteOrder.BIG_ENDIAN)
@@ -184,126 +227,71 @@ class Deconstruct(data: ByteBuffer) {
 
     val minor = data.getShort
     val major = data.getShort
-    scanConstantPool(data.getShort)
+    val pool = new ConstantPool(data.getShort, data)
+    scanConstantPool(pool)
 
     val accessFlags = data.getShort
-    val classNameEntry = constantPool(data.getShort)
-    val superclassNameEntry = constantPool(data.getShort)
+    val classNameEntry = pool(data.getShort)
+    val superclassNameEntry = pool(data.getShort)
 
     val interfaceIndexes = (0 until data.getShort) map { _ => data.getShort }
-    val fields = (0 until data.getShort) map { _ => scanField() }
-    val methods = (0 until data.getShort) map { _ => scanField() }
-    val attributes = (0 until data.getShort) map { _ => scanAttribute() }
+    val fields = (0 until data.getShort) map { _ => scanField(pool) }
+    val methods = (0 until data.getShort) map { _ => scanField(pool) }
+    val attributes = (0 until data.getShort) map { _ => scanAttribute(pool) }
 
     ClassFile(
-      this,
+      pool,
       major,
       minor,
       accessFlags,
       classNameEntry,
       superclassNameEntry,
-      interfaceIndexes.map { constantPool(_) },
+      interfaceIndexes.map { pool(_) },
       fields,
       methods,
       attributes
     )
   }
 
-  private[this] def scanField() = {
+  private[this] def scanField(pool: ConstantPool) = {
     val accessFlags = data.getShort
     val nameIndex = data.getShort
     val descriptorIndex = data.getShort
     val attributeCount = data.getShort
-    val attributes = (0 until attributeCount) map { _ => scanAttribute() }
-    Field(this, constantPool(nameIndex), constantPool(descriptorIndex), accessFlags, attributes)
+    val attributes = (0 until attributeCount) map { _ => scanAttribute(pool) }
+    Field(pool, pool(nameIndex), pool(descriptorIndex), accessFlags, attributes)
   }
 
-  private[this] def scanAttribute() = {
+  private[this] def scanAttribute(pool: ConstantPool) = {
     val nameIndex = data.getShort
     val size = data.getInt
-    val rv = Attribute(this, constantPool(nameIndex), data.position, size)
+    val rv = Attribute(pool, pool(nameIndex), data.position, size)
     data.position(data.position + size)
     rv
   }
 
-  private[this] def scanConstantPool(count: Int) {
-    var constantIndex = 1
-    while (constantIndex < count) {
-      val entry = data.get match {
+  private[this] def scanConstantPool(pool: ConstantPool) {
+    while (!pool.full) { // we have some bad news about the pool.
+      data.get match {
         case 1 => {
           val length = data.getShort
-          constantPool(constantIndex) = Utf8(data.position, length)
+          pool.add(Utf8(data.position, length))
           data.position(data.position + length)
-          constantIndex += 1
         }
-        case 3 => {
-          constantPool(constantIndex) = I32(data.getInt)
-          constantIndex += 1
+        case 3 => pool.add(I32(data.getInt))
+        case 4 => pool.add(F32(data.getFloat))
+        case 5 => pool.add(I64(data.getLong), 2)
+        case 6 => pool.add(F64(data.getDouble), 2)
+        case 7 => pool.add(ClassRef(data.getShort))
+        case 8 => pool.add(StringRef(data.getShort))
+        case 9 => pool.add(FieldRef(data.getShort, data.getShort))
+        case 10 => pool.add(MethodRef(data.getShort, data.getShort))
+        case 11 => pool.add(InterfaceMethodRef(data.getShort, data.getShort))
+        case 12 => pool.add(NameAndType(data.getShort, data.getShort))
+        case n => {
+          throw new ParseException("Unknown constant tag " + n + " at position " + data.position)
         }
-        case 4 => {
-          constantPool(constantIndex) = F32(data.getFloat)
-          constantIndex += 1
-        }
-        case 5 => {
-          constantPool(constantIndex) = I64(data.getLong)
-          constantIndex += 2
-        }
-        case 6 => {
-          constantPool(constantIndex) = F64(data.getDouble)
-          constantIndex += 2
-        }
-        case 7 => {
-          constantPool(constantIndex) = ClassRef(data.getShort)
-          constantIndex += 1
-        }
-        case 8 => {
-          constantPool(constantIndex) = StringRef(data.getShort)
-          constantIndex += 1
-        }
-        case 9 => {
-          constantPool(constantIndex) = FieldRef(data.getShort, data.getShort)
-          constantIndex += 1
-        }
-        case 10 => {
-          constantPool(constantIndex) = MethodRef(data.getShort, data.getShort)
-          constantIndex += 1
-        }
-        case 11 => {
-          constantPool(constantIndex) = InterfaceMethodRef(data.getShort, data.getShort)
-          constantIndex += 1
-        }
-        case 12 => {
-          constantPool(constantIndex) = NameAndType(data.getShort, data.getShort)
-          constantIndex += 1
-        }
-        case n => throw new ParseException("Unknown constant pool tag " + n + " at position " + data.position)
       }
     }
-  }
-
-  def stringify(entry: ConstantPoolEntry): String = entry match {
-    case Utf8(d, l) => {
-      // FIXME: maddeningly, "Utf8" uses a modified form of utf-8 that java can't actually decode.
-      // i've decided that for now i don't care.
-      if (l > 0) {
-        val buffer = new Array[Byte](l)
-        data.position(d)
-        data.get(buffer)
-        new String(buffer, "UTF-8")
-      } else {
-        ""
-      }
-    }
-    case I32(n) => n.toString
-    case F32(n) => n.toString
-    case I64(n) => n.toString
-    case F64(n) => n.toString
-    case ClassRef(i) => stringify(constantPool(i))
-    case StringRef(i) => stringify(constantPool(i))
-    case FieldRef(c, n) => stringify(constantPool(c)) + "/" + stringify(constantPool(n))
-/*  case class MethodRef(classIndex: Int, nameAndTypeIndex: Int) extends ConstantPoolEntry
-  case class InterfaceMethodRef(classIndex: Int, nameAndTypeIndex: Int) extends ConstantPoolEntry
-  case class NameAndType(nameIndex: Int, typeIndex: Int) extends ConstantPoolEntry
-  */
   }
 }
