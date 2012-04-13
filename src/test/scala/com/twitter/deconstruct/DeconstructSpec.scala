@@ -8,8 +8,8 @@ class DeconstructSpec extends FunSpec {
     it("JournalFile.class") {
       val classfile = Deconstruct(getClass.getClassLoader.getResourceAsStream("JournalFile.class"))
 
-      assert((classfile.accessFlags & ClassAttributes.ACC_PUBLIC) != 0)
-      assert((classfile.accessFlags & ClassAttributes.ACC_SYNTHETIC) === 0)
+      assert((classfile.accessFlags & ClassFlags.ACC_PUBLIC) != 0)
+      assert((classfile.accessFlags & ClassFlags.ACC_SYNTHETIC) === 0)
       assert(classfile.className === "com/twitter/libkestrel/JournalFile")
       assert(classfile.superclassName === "java/lang/Object")
       assert(classfile.interfaces.size === 0)
@@ -21,8 +21,8 @@ class DeconstructSpec extends FunSpec {
       assert(classfile.methods.size === 4)
 
       assert(classfile.methods(0).name === "open")
-      assert((classfile.methods(0).accessFlags & MethodAttributes.ACC_PUBLIC) != 0)
-      assert((classfile.methods(0).accessFlags & MethodAttributes.ACC_SYNTHETIC) === 0)
+      assert((classfile.methods(0).accessFlags & MethodFlags.ACC_PUBLIC) != 0)
+      assert((classfile.methods(0).accessFlags & MethodFlags.ACC_SYNTHETIC) === 0)
       assert(classfile.methods(0).descriptor === "(Ljava/io/File;)Lcom/twitter/libkestrel/JournalFileReader;")
 
     }
@@ -51,12 +51,12 @@ class DeconstructSpec extends FunSpec {
 
       assert(classfile.fields.size === 23)
       assert(classfile.fields(1).name === "readerConfig")
-      assert(classfile.fields(1).accessFlags === (FieldAttributes.ACC_PRIVATE | FieldAttributes.ACC_FINAL))
+      assert(classfile.fields(1).accessFlags === (FieldFlags.ACC_PRIVATE | FieldFlags.ACC_FINAL))
       assert(classfile.fields(1).descriptor === "Lcom/twitter/libkestrel/config/JournaledQueueReaderConfig;")
 
       assert(classfile.methods.size === 61)
       assert(classfile.methods(25).name == "openItems")
-      assert(classfile.methods(25).accessFlags == MethodAttributes.ACC_PUBLIC)
+      assert(classfile.methods(25).accessFlags == MethodFlags.ACC_PUBLIC)
       assert(classfile.methods(25).descriptor == "()I")
     }
   }

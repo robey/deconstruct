@@ -6,8 +6,8 @@ import scala.collection.mutable
 
 class ParseException(reason: String) extends Exception(reason)
 
-sealed trait ConstantPoolEntry
-object ConstantPoolEntry {
+private[deconstruct] sealed trait ConstantPoolEntry
+private[deconstruct] object ConstantPoolEntry {
   case class Utf8(dataIndex: Int, length: Int) extends ConstantPoolEntry
   case class I32(n: Int) extends ConstantPoolEntry
   case class F32(n: Float) extends ConstantPoolEntry
@@ -21,7 +21,11 @@ object ConstantPoolEntry {
   case class NameAndType(nameIndex: Int, typeIndex: Int) extends ConstantPoolEntry
 }
 
-class ConstantPool(count: Int, data: ByteBuffer) {
+/**
+ * In java class files, the "constant pool" is where almost all string data is stored. Most other
+ * data types are indirect pointers into this pool.
+ */
+private[deconstruct] class ConstantPool(count: Int, data: ByteBuffer) {
   import ConstantPoolEntry._
 
   private[this] val pool = new Array[ConstantPoolEntry](count)
@@ -80,23 +84,26 @@ case class ClassFile(
   methods: Seq[Deconstruct.Field],
   attributes: Seq[Deconstruct.Attribute]
 ) {
-  def className = pool.stringify(classNameEntry)
-  def superclassName = pool.stringify(superclassNameEntry)
-  def interfaces = interfaceEntries.map { pool.stringify(_) }
+  lazy val className = pool.stringify(classNameEntry)
+  lazy val superclassName = pool.stringify(superclassNameEntry)
+  lazy val interfaces = interfaceEntries.map { pool.stringify(_) }
 
   def dump: String = {
-    "class %s (%d.%d) %s\n".format(className, majorVersion, minorVersion, ClassAttributes.toString(accessFlags)) +
+    "class %s (%d.%d) %s\n".format(className, majorVersion, minorVersion, ClassFlags.toString(accessFlags)) +
     "extends %s\n".format(superclassName) +
     interfaces.map { iface => "with %s\n".format(iface) }.mkString +
     "{\n" +
-    fields.map { f => "  field %s: %s %s\n".format(f.name, f.descriptor, FieldAttributes.toString(f.accessFlags)) }.mkString +
-    methods.map { m => "  method %s: %s %s\n".format(m.name, m.descriptor, MethodAttributes.toString(m.accessFlags)) }.mkString +
+    fields.map { f => "  field %s: %s %s\n".format(f.name, f.descriptor, FieldFlags.toString(f.accessFlags)) }.mkString +
+    methods.map { m => "  method %s: %s %s\n".format(m.name, m.descriptor, MethodFlags.toString(m.accessFlags)) }.mkString +
     attributes.map { a => "  attribute %s: %d bytes\n".format(a.name, a.size) }.mkString +
     "}\n"
   }
 }
 
-object ClassAttributes {
+/**
+ * Flags that may be set in the `accessFlags` field of a class.
+ */
+object ClassFlags {
   val ACC_PUBLIC = 0x0001
   val ACC_FINAL = 0x0010
   val ACC_SUPER = 0x0020
@@ -120,7 +127,10 @@ object ClassAttributes {
   }
 }
 
-object FieldAttributes {
+/**
+ * Flags that may be set in the `accessFlags` field of a field.
+ */
+object FieldFlags {
   val ACC_PUBLIC = 0x0001
   val ACC_PRIVATE = 0x0002
   val ACC_PROTECTED = 0x0004
@@ -146,7 +156,10 @@ object FieldAttributes {
   }
 }
 
-object MethodAttributes {
+/**
+ * Flags that may be set in the `accessFlags` field of a method.
+ */
+object MethodFlags {
   val ACC_PUBLIC = 0x0001
   val ACC_PRIVATE = 0x0002
   val ACC_PROTECTED = 0x0004
@@ -178,9 +191,16 @@ object MethodAttributes {
   }
 }
 
+/**
+ * Tool for extracting basic data out of a java class file. This does not bother parsing bytecode
+ * or annotations, but instead focuses on the public API of a class.
+ *
+ * Strings are extracted from the data lazily, on demand, so the initial scan should require only
+ * as much time as it takes to parse the data segments.
+ */
 object Deconstruct {
   case class Attribute(pool: ConstantPool, nameEntry: ConstantPoolEntry, dataIndex: Int, size: Int) {
-    def name = pool.stringify(nameEntry)
+    lazy val name = pool.stringify(nameEntry)
   }
 
   case class Field(
@@ -190,10 +210,13 @@ object Deconstruct {
     accessFlags: Int,
     attributes: Seq[Attribute]
   ) {
-    def name = pool.stringify(nameEntry)
-    def descriptor = pool.stringify(descriptorEntry)
+    lazy val name = pool.stringify(nameEntry)
+    lazy val descriptor = pool.stringify(descriptorEntry)
   }
 
+  /**
+   * Convert an input stream into a `ByteBuffer` and then extract the class description from it.
+   */
   def apply(in: InputStream): ClassFile = {
     val out = new ByteArrayOutputStream()
     val buf = new Array[Byte](1 << 20)
@@ -205,14 +228,20 @@ object Deconstruct {
     Deconstruct(out.toByteArray)
   }
 
+  /**
+   * Convert a byte array into a `ByteBuffer` and then extract the class description from it.
+   */
   def apply(data: Array[Byte]): ClassFile = apply(ByteBuffer.wrap(data))
 
+  /**
+   * Extract the class description from a `ByteBuffer` containing a java class file.
+   */
   def apply(data: ByteBuffer): ClassFile = {
     new Deconstruct(data).scan()
   }
 }
 
-class Deconstruct(data: ByteBuffer) {
+private class Deconstruct(data: ByteBuffer) {
   import Deconstruct._
   import ConstantPoolEntry._
 
