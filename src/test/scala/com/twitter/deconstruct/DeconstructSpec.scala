@@ -3,7 +3,6 @@ package com.twitter.deconstruct
 import org.scalatest._
 
 class DeconstructSpec extends FunSpec {
-
   describe("Deconstruct") {
     it("JournalFile.class") {
       val classfile = Deconstruct(getClass.getClassLoader.getResourceAsStream("JournalFile.class"))
